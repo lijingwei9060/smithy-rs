@@ -52,7 +52,7 @@ class ServerServiceGenerator(
 
     private val service = codegenContext.serviceShape
     private val serviceId = service.id
-    private val serviceName = serviceId.name.toPascalCase()
+    private val serviceName = serviceId.name
     private val builderName = "${serviceName}Builder"
 
     /** Calculate all `operationShape`s contained within the `ServiceShape`. */

@@ -40,7 +40,7 @@ open class ServerRootGenerator(
                 it.id
             },
         ).toList()
-    private val serviceName = codegenContext.serviceShape.id.name.toPascalCase()
+    private val serviceName = codegenContext.serviceShape.id.name
 
     fun documentation(writer: RustWriter) {
         val builderFieldNames =
