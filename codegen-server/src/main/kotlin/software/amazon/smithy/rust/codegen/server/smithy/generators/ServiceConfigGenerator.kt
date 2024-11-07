@@ -163,7 +163,7 @@ class ServiceConfigGenerator(
             "Tower" to RuntimeType.Tower,
             "Stack" to RuntimeType.Tower.resolve("layer::util::Stack"),
         )
-    private val serviceName = codegenContext.serviceShape.id.name.toPascalCase()
+    private val serviceName = codegenContext.serviceShape.id.name
 
     fun render(writer: RustWriter) {
         val unwrapConfigBuilder =
