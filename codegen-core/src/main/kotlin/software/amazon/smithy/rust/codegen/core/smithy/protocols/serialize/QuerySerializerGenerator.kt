@@ -29,6 +29,7 @@ import software.amazon.smithy.rust.codegen.core.rustlang.rustBlockTemplate
 import software.amazon.smithy.rust.codegen.core.rustlang.rustTemplate
 import software.amazon.smithy.rust.codegen.core.rustlang.withBlock
 import software.amazon.smithy.rust.codegen.core.smithy.CodegenContext
+import software.amazon.smithy.rust.codegen.core.smithy.customize.Section
 import software.amazon.smithy.rust.codegen.core.smithy.RuntimeType
 import software.amazon.smithy.rust.codegen.core.smithy.RustSymbolProvider
 import software.amazon.smithy.rust.codegen.core.smithy.generators.UnionGenerator
@@ -44,7 +45,34 @@ import software.amazon.smithy.rust.codegen.core.util.inputShape
 import software.amazon.smithy.rust.codegen.core.util.isTargetUnit
 import software.amazon.smithy.rust.codegen.core.util.orNull
 
-abstract class QuerySerializerGenerator(private val codegenContext: CodegenContext) : StructuredDataSerializerGenerator {
+
+
+/**
+ * Class describing a AWS Query serializer section that can be used in a customization.
+ */
+sealed class QuerySerializerSection(name: String) : Section(name) {
+    /** Mutate the server error object prior to finalization. Eg: this can be used to inject `__type` to record the error type. */
+    data class ServerError(val structureShape: StructureShape, val queryObject: String) :
+        QuerySerializerSection("ServerError")
+
+    /** Manipulate the serializer context for a map prior to it being serialized. **/
+    data class BeforeIteratingOverMapOrCollection(val shape: Shape, val context: QuerySerializerGenerator.Context<Shape>) :
+        QuerySerializerSection("BeforeIteratingOverMapOrCollection")
+
+    /** Manipulate the serializer context for a non-null member prior to it being serialized. **/
+    data class BeforeSerializingNonNullMember(val shape: Shape, val context: QuerySerializerGenerator.MemberContext) :
+        QuerySerializerSection("BeforeSerializingNonNullMember")
+
+    /** Mutate the input object prior to finalization. */
+    data class InputStruct(val structureShape: StructureShape, val queryObject: String) :
+        QuerySerializerSection("InputStruct")
+
+    /** Mutate the output object prior to finalization. */
+    data class OutputStruct(val structureShape: StructureShape, val queryObject: String) :
+        QuerySerializerSection("OutputStruct")
+}
+
+abstract class QuerySerializerGenerator(val codegenContext: CodegenContext) : StructuredDataSerializerGenerator {
     protected data class Context<T : Shape>(
         /** Expression that yields a QueryValueWriter */
         val writerExpression: String,

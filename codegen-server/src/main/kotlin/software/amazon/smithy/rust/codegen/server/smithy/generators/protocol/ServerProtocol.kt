@@ -27,6 +27,7 @@ import software.amazon.smithy.rust.codegen.core.smithy.protocols.HttpLocation
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.Protocol
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.RestJson
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.RestXml
+import software.amazon.smithy.rust.codegen.core.smithy.protocols.AwsQueryProtocol
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.RpcV2Cbor
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.awsJsonFieldName
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.CborParserCustomization
@@ -35,10 +36,12 @@ import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.CborParse
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.JsonParserCustomization
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.JsonParserGenerator
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.JsonParserSection
+import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.AwsQueryParserGenerator
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.ReturnSymbolToParse
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.StructuredDataParserGenerator
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.restJsonFieldName
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.serialize.CborSerializerGenerator
+import software.amazon.smithy.rust.codegen.core.smithy.protocols.serialize.AwsQuerySerializerGenerator
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.serialize.StructuredDataSerializerGenerator
 import software.amazon.smithy.rust.codegen.core.util.dq
 import software.amazon.smithy.rust.codegen.server.smithy.ServerCargoDependency
@@ -231,6 +234,10 @@ private fun restRouterType(runtimeConfig: RuntimeConfig) =
     ServerCargoDependency.smithyHttpServer(runtimeConfig).toType()
         .resolve("protocol::rest::router::RestRouter")
 
+private fun awsQueryRouterType(runtimeConfig: RuntimeConfig) =
+    ServerCargoDependency.smithyHttpServer(runtimeConfig).toType()
+        .resolve("protocol::aws_query::router::AwsQueryRouter")
+
 class ServerRestJsonProtocol(
     private val serverCodegenContext: ServerCodegenContext,
     private val additionalParserCustomizations: List<JsonParserCustomization> = listOf(),
@@ -298,6 +305,39 @@ class ServerRestXmlProtocol(
         requestSpecModule.resolve("RequestSpec")
 
     override fun serverRouterRuntimeConstructor() = "new_rest_xml_router"
+
+    override fun serverContentTypeCheckNoModeledInput() = true
+
+    override fun deserializePayloadErrorType(binding: HttpBindingDescriptor): RuntimeType =
+        deserializePayloadErrorType(
+            codegenContext,
+            binding,
+            requestRejection(runtimeConfig),
+            RuntimeType.smithyXml(runtimeConfig).resolve("decode::XmlDecodeError"),
+        )
+}
+
+class ServerAwsQueryProtocol(
+    codegenContext: CodegenContext,
+) : AwsQueryProtocol(codegenContext), ServerProtocol {
+    val runtimeConfig = codegenContext.runtimeConfig
+    override val protocolModulePath = "aws_query"
+
+    override fun markerStruct() = ServerRuntimeType.protocol("AwsQuery", protocolModulePath, runtimeConfig)
+
+    override fun routerType() = awsQueryRouterType(runtimeConfig)
+
+    override fun serverRouterRequestSpec(
+        operationShape: OperationShape,
+        operationName: String,
+        serviceName: String,
+        requestSpecModule: RuntimeType,
+    ): Writable = RestRequestSpecGenerator(httpBindingResolver, requestSpecModule).generate(operationShape)
+
+    override fun serverRouterRequestSpecType(requestSpecModule: RuntimeType): RuntimeType =
+        requestSpecModule.resolve("RequestSpec")
+
+    override fun serverRouterRuntimeConstructor() = "new_aws_query_router"
 
     override fun serverContentTypeCheckNoModeledInput() = true
 

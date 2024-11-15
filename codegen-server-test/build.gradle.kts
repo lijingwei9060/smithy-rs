@@ -99,6 +99,10 @@ val allCodegenTests = "../codegen-core/common-test-models".let { commonModels ->
             imports = listOf("$commonModels/pokemon-awsjson.smithy", "$commonModels/pokemon-common.smithy"),
         ),
         CodegenTest("com.amazonaws.ssm#AmazonSSM", "ssm", imports = listOf("$commonModels/ssm.json")),
+        CodegenTest("com.amazonaws.account#Account", "account", imports = listOf("$commonModels/account.json")),
+        CodegenTest("com.amazonaws.cognitoidentity#AWSCognitoIdentityService", "cognito", imports = listOf("$commonModels/cognito-identity.json")),
+        CodegenTest("com.amazonaws.iam#AWSIdentityManagementV20100508", "iam", imports = listOf("$commonModels/iam.json")),
+        CodegenTest("com.amazonaws.sts#AWSSecurityTokenServiceV20110615", "sts", imports = listOf("$commonModels/sts.json")),
     )
 }
 
