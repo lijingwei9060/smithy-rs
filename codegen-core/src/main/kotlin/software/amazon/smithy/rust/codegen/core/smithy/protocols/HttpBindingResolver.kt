@@ -212,7 +212,7 @@ open class StaticHttpBindingResolver(
 ) : HttpBindingResolver {
     private fun bindings(shape: ToShapeId?) =
         shape?.let { model.expectShape(it.toShapeId()) }?.members()
-            ?.map { HttpBindingDescriptor(it, HttpLocation.DOCUMENT, "document") }
+            ?.map { HttpBindingDescriptor(it, HttpLocation.QUERY, it.toShapeId().member.orElse("query")) }
             ?.toList()
             ?: emptyList()
 

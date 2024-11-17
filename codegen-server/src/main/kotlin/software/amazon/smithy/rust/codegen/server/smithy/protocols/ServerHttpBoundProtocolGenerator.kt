@@ -1030,6 +1030,9 @@ class ServerHttpBoundProtocolTraitImplGenerator(
             httpBindingResolver.requestBindings(operationShape).find {
                 it.location == HttpLocation.QUERY_PARAMS
             }
+
+        logger.warning("[ServerHttpBoundProtocolGenerator] query-binding: $queryBindings, operation: ${operationShape.toShapeId()}")
+        logger.warning("[ServerHttpBoundProtocolGenerator] queryParams-binding: $queryParamsBinding, operation: ${operationShape.toShapeId()}")
         if (queryBindings.isEmpty() && queryParamsBinding == null) {
             return
         }

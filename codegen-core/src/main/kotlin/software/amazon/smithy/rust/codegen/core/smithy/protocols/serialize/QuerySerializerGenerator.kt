@@ -73,7 +73,7 @@ sealed class QuerySerializerSection(name: String) : Section(name) {
 }
 
 abstract class QuerySerializerGenerator(val codegenContext: CodegenContext) : StructuredDataSerializerGenerator {
-    protected data class Context<T : Shape>(
+    data class Context<T : Shape>(
         /** Expression that yields a QueryValueWriter */
         val writerExpression: String,
         /** Expression representing the value to write to the QueryValueWriter */
@@ -82,7 +82,7 @@ abstract class QuerySerializerGenerator(val codegenContext: CodegenContext) : St
         val isOptional: Boolean = false,
     )
 
-    protected data class MemberContext(
+    data class MemberContext(
         /** Expression that yields a QueryValueWriter */
         val writerExpression: String,
         /** Expression representing the value to write to the QueryValueWriter */

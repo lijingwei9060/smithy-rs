@@ -21,6 +21,7 @@ import software.amazon.smithy.rust.codegen.core.smithy.protocols.parse.Structure
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.serialize.AwsQuerySerializerGenerator
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.serialize.StructuredDataSerializerGenerator
 import software.amazon.smithy.rust.codegen.core.util.getTrait
+import software.amazon.smithy.rust.codegen.core.smithy.protocols.serialize.XmlBindingTraitSerializerGenerator
 
 private val awsQueryHttpTrait =
     HttpTrait.builder()
@@ -56,7 +57,7 @@ open class AwsQueryProtocol(val codegenContext: CodegenContext) : Protocol {
         AwsQueryParserGenerator(codegenContext, awsQueryErrors)
 
     override fun structuredDataSerializer(): StructuredDataSerializerGenerator =
-        AwsQuerySerializerGenerator(codegenContext, httpBindingResolver)
+        XmlBindingTraitSerializerGenerator(codegenContext, httpBindingResolver)
 
     override fun parseHttpErrorMetadata(operationShape: OperationShape): RuntimeType =
         ProtocolFunctions.crossOperationFn("parse_http_error_metadata") { fnName ->
