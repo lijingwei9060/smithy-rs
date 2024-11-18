@@ -17,6 +17,7 @@ import software.amazon.smithy.model.traits.HttpTrait
 import software.amazon.smithy.model.traits.TimestampFormatTrait
 import software.amazon.smithy.rust.codegen.core.util.expectTrait
 import software.amazon.smithy.rust.codegen.core.util.orNull
+import java.util.logging.Logger
 
 typealias HttpLocation = HttpBinding.Location
 
@@ -210,9 +211,22 @@ open class StaticHttpBindingResolver(
     private val responseContentType: String,
     private val eventStreamMessageContentType: String? = null,
 ) : HttpBindingResolver {
+    private val logger = Logger.getLogger(javaClass.name)
     private fun bindings(shape: ToShapeId?) =
         shape?.let { model.expectShape(it.toShapeId()) }?.members()
-            ?.map { HttpBindingDescriptor(it, HttpLocation.QUERY, it.toShapeId().member.orElse("query")) }
+            ?.map { 
+                 member -> 
+                //logger.warning("[StaticHttpBindingResolver] ${member.target} ${member.getMemberName()}")
+                
+                // val targetShape = model.expectShape(member.getTarget())
+                // val location = when {
+                //     targetShape?.isListShape() == true -> HttpLocation.QUERY_PARAMS
+                //     targetShape?.isSetShape() == true -> HttpLocation.QUERY_PARAMS
+                //     else -> HttpLocation.QUERY
+                // }
+                
+                HttpBindingDescriptor(member, HttpLocation.QUERY, member.getMemberName())
+             }
             ?.toList()
             ?: emptyList()
 
@@ -222,9 +236,9 @@ open class StaticHttpBindingResolver(
         bindings(operationShape.input.orNull())
 
     override fun responseBindings(operationShape: OperationShape): List<HttpBindingDescriptor> =
-        bindings(operationShape.output.orNull())
+         emptyList()
 
-    override fun errorResponseBindings(errorShape: ToShapeId): List<HttpBindingDescriptor> = bindings(errorShape)
+    override fun errorResponseBindings(errorShape: ToShapeId): List<HttpBindingDescriptor> = emptyList()
 
     override fun requestContentType(operationShape: OperationShape): String = requestContentType
 

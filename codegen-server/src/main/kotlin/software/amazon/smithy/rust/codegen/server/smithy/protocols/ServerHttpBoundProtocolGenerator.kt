@@ -1031,8 +1031,8 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                 it.location == HttpLocation.QUERY_PARAMS
             }
 
-        logger.warning("[ServerHttpBoundProtocolGenerator] query-binding: $queryBindings, operation: ${operationShape.toShapeId()}")
-        logger.warning("[ServerHttpBoundProtocolGenerator] queryParams-binding: $queryParamsBinding, operation: ${operationShape.toShapeId()}")
+        // logger.warning("[ServerHttpBoundProtocolGenerator] query-binding: $queryBindings, operation: ${operationShape.toShapeId()}")
+        // logger.warning("[ServerHttpBoundProtocolGenerator] queryParams-binding: $queryParamsBinding, operation: ${operationShape.toShapeId()}")
         if (queryBindings.isEmpty() && queryParamsBinding == null) {
             return
         }
@@ -1070,7 +1070,13 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                 rust("let mut ${symbolProvider.toMemberName(it.member)}_seen = false;")
             }
             queryBindingsTargetingCollection.forEach {
-                rust("let mut ${symbolProvider.toMemberName(it.member)} = Vec::new();")
+                val targetCollectionShape = model.expectShape(it.member.target, CollectionShape::class.java)
+                val memberShape = model.expectShape(targetCollectionShape.member.target)
+                when {
+                    memberShape.isStructureShape() ||  memberShape.isSetShape() || memberShape.isListShape() || memberShape.isMapShape()-> { rust("let mut ${symbolProvider.toMemberName(it.member)} = HashMap::new();") }
+                    else -> { rust("let mut ${symbolProvider.toMemberName(it.member)} = Vec::new();") } // simple
+                }               
+                
             }
 
             rustBlock("for (k, v) in pairs") {
@@ -1089,52 +1095,72 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                         "deserializer" to deserializer,
                     )
                 }
-                queryBindingsTargetingCollection.forEachIndexed { idx, it ->
-                    rustBlock("${if (idx > 0) "else " else ""}if k == ${it.locationName.dq()}") {
-                        val targetCollectionShape = model.expectShape(it.member.target, CollectionShape::class.java)
-                        val memberShape = model.expectShape(targetCollectionShape.member.target)
+                queryBindingsTargetingCollection.forEachIndexed { idx, it ->   
+                    val targetCollectionShape = model.expectShape(it.member.target, CollectionShape::class.java)
+                    val memberShape = model.expectShape(targetCollectionShape.member.target)
 
-                        when {
-                            memberShape.isStringShape -> {
-                                if (queryParamsBinding != null) {
-                                    // If there's an `@httpQueryParams` binding, it will want to consume the parsed data
-                                    // too further down, so we need to clone it.
-                                    rust("let v = v.clone().into_owned();")
-                                } else {
-                                    rust("let v = v.into_owned();")
-                                }
-                            }
-                            memberShape.isTimestampShape -> {
-                                val index = HttpBindingIndex.of(model)
-                                val timestampFormat =
-                                    index.determineTimestampFormat(
-                                        it.member,
-                                        it.location,
-                                        protocol.defaultTimestampFormat,
-                                    )
-                                val timestampFormatType = RuntimeType.parseTimestampFormat(CodegenTarget.SERVER, runtimeConfig, timestampFormat)
+                    logger.warning("[isStructureShape] ${it} ${memberShape}: ${memberShape.isStructureShape}" )
+
+                    when {
+                        memberShape.isStructureShape ||  memberShape.isSetShape || memberShape.isListShape || memberShape.isMapShape -> { // collection of collection
+                            var memberLocationName = "${it.locationName}.member."
+                            rustBlock("${if (idx > 0) "else " else ""}if k.start_with(${memberLocationName.dq()})") {
+                                rust("let k_names: Vec<&str> = k.splitn(4, '.').collect();")
                                 rustTemplate(
-                                    """
-                                    let v = #{DateTime}::from_str(&v, #{format})?
+                                    """                                    
+                                    if k_names.len() < 4 { return Err(#{RequestRejection}); }                                    
                                     """.trimIndent(),
-                                    *codegenScope,
-                                    "format" to timestampFormatType,
+                                    "RequestRejection" to protocol.requestRejection(runtimeConfig)  
                                 )
-                                for (customization in customizations) {
-                                    customization.section(ServerHttpBoundProtocolSection.AfterTimestampDeserializedMember(it.member))(this)
-                                }
-                                rust(";")
-                            }
-                            else -> { // Number or boolean.
-                                rust(
-                                    """
-                                    let v = <_ as #T>::parse_smithy_primitive(&v)?;
-                                    """.trimIndent(),
-                                    RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
-                                )
+                                rust("match ${symbolProvider.toMemberName(it.member)}.get_mut(&k_names[2]) { Some(b) => b.set_}")
                             }
                         }
-                        rust("${symbolProvider.toMemberName(it.member)}.push(v);")
+                        else -> {
+                            rustBlock("${if (idx > 0) "else " else ""}if k == ${it.locationName.dq()}") {
+                                when {
+                                    memberShape.isStringShape -> {
+                                        if (queryParamsBinding != null) {
+                                            // If there's an `@httpQueryParams` binding, it will want to consume the parsed data
+                                            // too further down, so we need to clone it.
+                                            rust("let v = v.clone().into_owned();")
+                                        } else {
+                                            rust("let v = v.into_owned();")
+                                        }
+                                    }
+                                    memberShape.isTimestampShape -> {
+                                        val index = HttpBindingIndex.of(model)
+                                        val timestampFormat =
+                                            index.determineTimestampFormat(
+                                                it.member,
+                                                it.location,
+                                                protocol.defaultTimestampFormat,
+                                            )
+                                        val timestampFormatType = RuntimeType.parseTimestampFormat(CodegenTarget.SERVER, runtimeConfig, timestampFormat)
+                                        rustTemplate(
+                                            """
+                                            let v = #{DateTime}::from_str(&v, #{format})?
+                                            """.trimIndent(),
+                                            *codegenScope,
+                                            "format" to timestampFormatType,
+                                        )
+                                        for (customization in customizations) {
+                                            customization.section(ServerHttpBoundProtocolSection.AfterTimestampDeserializedMember(it.member))(this)
+                                        }
+                                        rust(";")
+                                    }
+                                    else -> { // Number or boolean.
+                                        rust(
+                                            """
+                                            let v = <_ as #T>::parse_smithy_primitive(&v)?;
+                                            """.trimIndent(),
+                                            RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
+                                        )
+                                    }
+                                }
+                                rust("${symbolProvider.toMemberName(it.member)}.push(v);")
+                            }
+                        
+                        }   
                     }
                 }
 
