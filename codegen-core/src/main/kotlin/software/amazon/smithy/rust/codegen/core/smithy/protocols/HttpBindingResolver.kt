@@ -236,7 +236,13 @@ open class StaticHttpBindingResolver(
         bindings(operationShape.input.orNull())
 
     override fun responseBindings(operationShape: OperationShape): List<HttpBindingDescriptor> =
-         emptyList()
+        operationShape.output.orNull()?.let { model.expectShape(it.toShapeId()) }?.members()
+            ?.map { 
+                 member -> 
+                HttpBindingDescriptor(member, HttpLocation.DOCUMENT, member.getMemberName())
+             }
+            ?.toList()
+            ?: emptyList()
 
     override fun errorResponseBindings(errorShape: ToShapeId): List<HttpBindingDescriptor> = emptyList()
 

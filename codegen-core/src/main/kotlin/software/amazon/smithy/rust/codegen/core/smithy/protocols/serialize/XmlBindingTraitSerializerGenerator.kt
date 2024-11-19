@@ -53,11 +53,13 @@ import software.amazon.smithy.rust.codegen.core.util.inputShape
 import software.amazon.smithy.rust.codegen.core.util.isTargetUnit
 import software.amazon.smithy.rust.codegen.core.util.letIf
 import software.amazon.smithy.rust.codegen.core.util.outputShape
+import java.util.logging.Logger
 
 class XmlBindingTraitSerializerGenerator(
     codegenContext: CodegenContext,
     private val httpBindingResolver: HttpBindingResolver,
 ) : StructuredDataSerializerGenerator {
+    private val logger = Logger.getLogger(javaClass.name)
     private val symbolProvider = codegenContext.symbolProvider
     private val runtimeConfig = codegenContext.runtimeConfig
     private val model = codegenContext.model
@@ -205,11 +207,13 @@ class XmlBindingTraitSerializerGenerator(
         }
 
     override fun operationOutputSerializer(operationShape: OperationShape): RuntimeType? {
+        logger.warning("jwiefiwfjeiwjef")
         val outputShape = operationShape.outputShape(model)
         val xmlMembers = operationShape.responseBodyMembers()
         if (xmlMembers.isEmpty()) {
             return null
         }
+        logger.warning("11111111111111111111111")
         val operationXmlName =
             xmlIndex.operationOutputShapeName(operationShape)
                 ?: throw CodegenException("operation must have a name if it has members")
