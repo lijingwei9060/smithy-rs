@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+use std::borrow::Cow;
 use std::convert::Infallible;
 
+use aws_smithy_http::url::Url;
+use http::request;
 use tower::Layer;
 use tower::Service;
 
@@ -19,15 +22,12 @@ use thiserror::Error;
 /// An AWS JSON routing error.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Relative URI was not "/".
-    #[error("relative URI is not \"/\"")]
-    NotRootUrl,
     /// Method was not `POST`.
     #[error("method not POST")]
     MethodNotAllowed,
-    /// Missing the `x-amz-target` header.
-    #[error("missing the \"x-amz-target\" header")]
-    MissingHeader,
+    /// Missing the `action` in query parameters.
+    #[error("missing the \"action\" in query parameters")]
+    MissingAction,
     /// Unable to parse header into UTF-8.
     #[error("failed to parse header: {0}")]
     InvalidHeader(ToStrError),
@@ -86,22 +86,26 @@ where
     type Error = Error;
 
     fn match_route(&self, request: &http::Request<B>) -> Result<S, Self::Error> {
-        // The URI must be root,
-        if request.uri() != "/" {
-            return Err(Error::NotRootUrl);
-        }
-
         // Only `Method::POST` is allowed.
         if request.method() != http::Method::POST {
             return Err(Error::MethodNotAllowed);
         }
 
-        // Find the `x-amz-target` header.
-        let target = request.headers().get("x-amz-target").ok_or(Error::MissingHeader)?;
-        let target = target.to_str().map_err(Error::InvalidHeader)?;
+        // The URI must be root
+        let url = Url::parse(&request.uri().to_string()).map_err(|_e| Error::MissingAction)?;
+
+        let (_, target) = url
+            .query_pairs()
+            .find(|(k, _v)| {
+                k == "Action"
+            })
+            .ok_or({
+                println!("2");
+                Error::MissingAction
+            })?;
 
         // Lookup in the `TinyMap` for a route for the target.
-        let route = self.routes.get(target).ok_or(Error::NotFound)?;
+        let route = self.routes.get(target.to_string().as_str()).ok_or(Error::NotFound)?;
         Ok(route.clone())
     }
 }
@@ -120,7 +124,7 @@ mod tests {
     use super::*;
     use crate::{protocol::test_helpers::req, routing::Router};
 
-    use http::{HeaderMap, HeaderValue, Method};
+    use http::Method;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -128,24 +132,21 @@ mod tests {
         let routes = vec![("Service.Operation")];
         let router: AwsQueryRouter<_> = routes.clone().into_iter().map(|operation| (operation, ())).collect();
 
-        let mut headers = HeaderMap::new();
-        headers.insert("x-amz-target", HeaderValue::from_static("Service.Operation"));
-
         // Valid request, should match.
         router
-            .match_route(&req(&Method::POST, "/", Some(headers.clone())))
+            .match_route(&req(
+                &Method::POST,
+                "http://localhost/something?Action=Service.Operation",
+                None,
+            ))
             .unwrap();
 
-        // No headers, should return `MissingHeader`.
+        // No headers, should return `MissingAction`.
         let res = router.match_route(&req(&Method::POST, "/", None));
-        assert_eq!(res.unwrap_err().to_string(), Error::MissingHeader.to_string());
+        assert_eq!(res.unwrap_err().to_string(), Error::MissingAction.to_string());
 
         // Wrong HTTP method, should return `MethodNotAllowed`.
-        let res = router.match_route(&req(&Method::GET, "/", Some(headers.clone())));
+        let res = router.match_route(&req(&Method::GET, "/", None));
         assert_eq!(res.unwrap_err().to_string(), Error::MethodNotAllowed.to_string());
-
-        // Wrong URI, should return `NotRootUrl`.
-        let res = router.match_route(&req(&Method::POST, "/something", Some(headers)));
-        assert_eq!(res.unwrap_err().to_string(), Error::NotRootUrl.to_string());
     }
 }

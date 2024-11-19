@@ -45,3 +45,5 @@ pub mod query_writer;
 pub mod event_stream;
 
 mod urlencode;
+
+pub use url;

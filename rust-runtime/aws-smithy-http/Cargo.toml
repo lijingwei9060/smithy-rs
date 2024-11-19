@@ -27,6 +27,7 @@ percent-encoding = "2.1.0"
 pin-project-lite = "0.2.9"
 pin-utils = "0.1.0"
 tracing = "0.1"
+url = "2.5"
 
 # For an adapter to enable the `Stream` trait for `aws_smithy_types::byte_stream::ByteStream`
 futures-core = "0.3.29"
