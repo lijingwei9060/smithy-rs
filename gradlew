@@ -211,8 +211,6 @@ DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
 set -- \
         "-Dorg.gradle.appname=$APP_BASE_NAME" \
         -classpath "$CLASSPATH" \
-        "-Dhttps.proxyHost=127.0.0.1" \
-        "-Dhttps.proxyPort=51000" \
         org.gradle.wrapper.GradleWrapperMain \
         "$@"
 

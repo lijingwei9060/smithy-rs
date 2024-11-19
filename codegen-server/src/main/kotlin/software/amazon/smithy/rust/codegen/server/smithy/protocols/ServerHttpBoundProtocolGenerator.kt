@@ -16,6 +16,7 @@ import software.amazon.smithy.model.shapes.MemberShape
 import software.amazon.smithy.model.shapes.NumberShape
 import software.amazon.smithy.model.shapes.OperationShape
 import software.amazon.smithy.model.shapes.Shape
+import software.amazon.smithy.model.shapes.SimpleShape
 import software.amazon.smithy.model.shapes.StructureShape
 import software.amazon.smithy.model.traits.ErrorTrait
 import software.amazon.smithy.model.traits.HttpErrorTrait
@@ -1017,6 +1018,14 @@ class ServerHttpBoundProtocolTraitImplGenerator(
             )
         }
 
+
+    //private fun serverRenderQueryStringSimpleShapeParser( writer: RustWriter,
+    //    operationShape: OperationShape,
+    //){
+    //    with(writer) {
+    //    }
+    //}
+
     private fun serverRenderQueryStringParser(
         writer: RustWriter,
         operationShape: OperationShape,
@@ -1064,8 +1073,19 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                     }
                 }
             }
-            val (queryBindingsTargetingCollection, queryBindingsTargetingSimple) =
-                queryBindings.partition { model.expectShape(it.member.target) is CollectionShape }
+
+            queryBindings.forEach {
+                var t1Input = model.expectShape(it.member.target)
+                if (t1Input is SimpleShape) {
+                    logger.warning("[queryBindings]${it.member} ${t1Input}: is  simple shape")
+                } else {
+                    logger.warning("[queryBindings]${it.member} ${t1Input}: is not simple shape")
+                }
+            }
+
+
+            val (queryBindingsTargetingSimple, queryBindingsTargetingCollection) =
+                queryBindings.partition { model.expectShape(it.member.target) is SimpleShape }
             queryBindingsTargetingSimple.forEach {
                 rust("let mut ${symbolProvider.toMemberName(it.member)}_seen = false;")
             }
@@ -1099,10 +1119,19 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                     val targetCollectionShape = model.expectShape(it.member.target, CollectionShape::class.java)
                     val memberShape = model.expectShape(targetCollectionShape.member.target)
 
-                    logger.warning("[isStructureShape] ${it} ${memberShape}: ${memberShape.isStructureShape}" )
+                    //logger.warning("[isStructureShape] ${it} ${memberShape}: ${memberShape.isStructureShape}" )
 
                     when {
                         memberShape.isStructureShape ||  memberShape.isSetShape || memberShape.isListShape || memberShape.isMapShape -> { // collection of collection
+
+
+                            //memberShape.members().forEach{ member ->  
+                            //    var key = member.getMemberName()
+                            //    var setter = member.setterName()
+                            //    
+                            //    logger.warning("[queryBindingsTargetingCollection] $key ${setter}  ${member.member}")
+                            //}
+
                             var memberLocationName = "${it.locationName}.member."
                             rustBlock("${if (idx > 0) "else " else ""}if k.start_with(${memberLocationName.dq()})") {
                                 rust("let k_names: Vec<&str> = k.splitn(4, '.').collect();")
@@ -1269,6 +1298,16 @@ class ServerHttpBoundProtocolTraitImplGenerator(
             *codegenScope,
         )
     }
+
+
+   //private fun generateStructParserFn(
+   //    binding: HttpBindingDescriptor, 
+   //    ercentDecoding: Boolean,
+   //): RuntimeType {
+   //    var structShape = model.expectShape(binding.member.target, StructureShape::class.java)
+   //    val output = unconstrainedShapeSymbolProvider.toSymbol(binding.member)
+   //    
+   //}
 
     private fun generateParseStrFn(
         binding: HttpBindingDescriptor,
