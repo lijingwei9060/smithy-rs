@@ -1074,14 +1074,14 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                 }
             }
 
-            queryBindings.forEach {
-                var t1Input = model.expectShape(it.member.target)
-                if (t1Input is SimpleShape) {
-                    logger.warning("[queryBindings]${it.member} ${t1Input}: is  simple shape")
-                } else {
-                    logger.warning("[queryBindings]${it.member} ${t1Input}: is not simple shape")
-                }
-            }
+            //queryBindings.forEach {
+            //    var t1Input = model.expectShape(it.member.target)
+            //    if (t1Input is SimpleShape) {
+            //        logger.warning("[queryBindings]${it.member} ${t1Input}: is  simple shape")
+            //    } else {
+            //        logger.warning("[queryBindings]${it.member} ${t1Input}: is not simple shape")
+            //    }
+            //}
 
 
             val (queryBindingsTargetingSimple, queryBindingsTargetingCollection) =
@@ -1093,7 +1093,7 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                 val targetCollectionShape = model.expectShape(it.member.target, CollectionShape::class.java)
                 val memberShape = model.expectShape(targetCollectionShape.member.target)
                 when {
-                    memberShape.isStructureShape() ||  memberShape.isSetShape() || memberShape.isListShape() || memberShape.isMapShape()-> { rust("let mut ${symbolProvider.toMemberName(it.member)} = HashMap::new();") }
+                    memberShape.isStructureShape() ||  memberShape.isSetShape() || memberShape.isListShape() || memberShape.isMapShape()-> { rust("let mut ${symbolProvider.toMemberName(it.member)} = #T::new();", RuntimeType.HashMap) }
                     else -> { rust("let mut ${symbolProvider.toMemberName(it.member)} = Vec::new();") } // simple
                 }               
                 
@@ -1133,11 +1133,11 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                             //}
 
                             var memberLocationName = "${it.locationName}.member."
-                            rustBlock("${if (idx > 0) "else " else ""}if k.start_with(${memberLocationName.dq()})") {
+                            rustBlock("${if (idx > 0) "else " else ""}if k.starts_with(${memberLocationName.dq()})") {
                                 rust("let k_names: Vec<&str> = k.splitn(4, '.').collect();")
                                 rustTemplate(
                                     """                                    
-                                    if k_names.len() < 4 { return Err(#{RequestRejection}); }                                    
+                                    if k_names.len() < 4 { return Err(#{RequestRejection}::ConstraintViolation("${it.locationName}".to_string())); }                                    
                                     """.trimIndent(),
                                     "RequestRejection" to protocol.requestRejection(runtimeConfig)  
                                 )
