@@ -207,13 +207,12 @@ class XmlBindingTraitSerializerGenerator(
         }
 
     override fun operationOutputSerializer(operationShape: OperationShape): RuntimeType? {
-        logger.warning("jwiefiwfjeiwjef")
         val outputShape = operationShape.outputShape(model)
         val xmlMembers = operationShape.responseBodyMembers()
         if (xmlMembers.isEmpty()) {
             return null
         }
-        logger.warning("11111111111111111111111")
+        
         val operationXmlName =
             xmlIndex.operationOutputShapeName(operationShape)
                 ?: throw CodegenException("operation must have a name if it has members")

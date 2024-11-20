@@ -318,7 +318,7 @@ class ServerRestXmlProtocol(
 }
 
 class ServerAwsQueryProtocol(
-    codegenContext: CodegenContext,
+    codegenContext: ServerCodegenContext,
 ) : AwsQueryProtocol(codegenContext), ServerProtocol {
     val runtimeConfig = codegenContext.runtimeConfig
     override val protocolModulePath = "aws_query"

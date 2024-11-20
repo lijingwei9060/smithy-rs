@@ -716,6 +716,39 @@ class ServerHttpBoundProtocolTraitImplGenerator(
         )
         val parser = structuredDataParser.serverInputParser(operationShape)
 
+        var protocolModulePath = protocol.protocolModulePath
+
+        if (protocolModulePath == "aws_query") {
+            // no body parser
+            // just parser path
+            // serverRenderQueryShapeParser(this, operationShape)
+            if (parser != null) {
+                rustTemplate(
+                    """
+                    let query_string = uri.query().unwrap_or("");
+                    let pairs: Vec<_> = #{FormUrlEncoded}::parse(query_string.as_bytes()).collect();
+                    input = #{parser}(pairs, input)?;
+                    """.trimIndent(),
+                    *codegenScope,
+                    "parser" to parser,
+                )
+                val err =
+                    if (ServerBuilderGenerator.hasFallibleBuilder(
+                            inputShape,
+                            model,
+                            symbolProvider,
+                            takeInUnconstrainedTypes = true,
+                        )
+                    ) {
+                        "?"
+                    } else {
+                        ""
+                    }
+                rustTemplate("input.build()$err", *codegenScope)            
+            }
+            return
+        }
+
         if (parser != null) {
             // `null` is only returned by Smithy when there are no members, but we know there's at least one, since
             // there's something to parse (i.e. `parser != null`), so `!!` is safe here.
@@ -1019,12 +1052,15 @@ class ServerHttpBoundProtocolTraitImplGenerator(
         }
 
 
-    //private fun serverRenderQueryStringSimpleShapeParser( writer: RustWriter,
-    //    operationShape: OperationShape,
-    //){
-    //    with(writer) {
-    //    }
-    //}
+    private fun serverRenderQueryShapeParser( 
+        writer: RustWriter,
+        operationShape: OperationShape,
+    ){
+        // with(writer) {
+        // }
+
+        logger.warning("[ServerHttpBoundProtocolGenerator] ${operationShape.toShapeId()}")
+    }
 
     private fun serverRenderQueryStringParser(
         writer: RustWriter,
