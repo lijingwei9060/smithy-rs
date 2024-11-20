@@ -436,6 +436,7 @@ dependencies = [
  "proptest",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

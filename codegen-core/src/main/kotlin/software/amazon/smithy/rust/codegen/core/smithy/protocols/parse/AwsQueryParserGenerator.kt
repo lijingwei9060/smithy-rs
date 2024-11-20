@@ -121,7 +121,7 @@ class AwsQueryParserGenerator(
         return protocolFunctions.deserializeFn(operationShape) { fnName ->
             Attribute.AllowUnusedMut.render(this)
             rustBlock(
-                "pub fn $fnName(inp: Vec<(&str, &str)>, mut builder: #1T) -> Result<#1T, #2T>",
+                "pub fn $fnName(inp: std::vec::Vec<(Cow<'_, str>, Cow<'_, str>)>, mut builder: #1T) -> Result<#1T, #2T>",
                 symbolProvider.symbolForBuilder(inputShape),
                 requestRejection,
             ) {
@@ -146,7 +146,7 @@ class AwsQueryParserGenerator(
             when {
                 targetShape.isMapShape() || targetShape.isStructureShape() -> {
                     var memberLocationName = "${it.getMemberName()}."  
-                    rust("let (inp, values): (Vec<_>, Vec<_>) = inp.into_iter().partition(|(k,_v)| k.starts_with(${memberLocationName.dq()}));")   
+                    rust("let (inp, values): (std::vec::Vec<_>, std::vec::Vec<_>) = inp.into_iter().partition(|(k,_v)| k.starts_with(${memberLocationName.dq()}));")   
                     rust("let values: Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(${memberLocationName.dq()}).unwrap(), v)).collect();") 
                     withBlockTemplate("builder = builder.${memberShape.setterName()}(Some(", "?));"){
                         parseStructure(model.expectShape(memberShape.target, StructureShape::class.java))
@@ -155,15 +155,15 @@ class AwsQueryParserGenerator(
 
                 targetShape.isSetShape() || targetShape.isListShape() -> {
                     var memberLocationName = "${it.getMemberName()}.member."
-                    rust("let (inp, values): (Vec<_>, Vec<_>) = inp.into_iter().partition(|(k,_v)| k.starts_with(${memberLocationName.dq()}));")
-                    rust("let values: Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(${memberLocationName.dq()}).unwrap(), v)).collect();")
+                    rust("let (inp, values): (std::vec::Vec<_>, std::vec::Vec<_>) = inp.into_iter().partition(|(k,_v)| k.starts_with(${memberLocationName.dq()}));")
+                    rust("let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(${memberLocationName.dq()}).unwrap(), v)).collect();")
                     withBlockTemplate("builder = builder.${memberShape.setterName()}(Some(", "?));"){
                         parseList(model.expectShape(memberShape.target, CollectionShape::class.java))
                     }                  
                 }
                 else -> {
                     rust("let mut ${memberNameSeen} = false;")
-                    rust("let (inp, values): (Vec<_>, Vec<_>) = inp.into_iter().partition(|(k,_v)| k == ${it.getMemberName().dq()});")
+                    rust("let (inp, values): (std::vec::Vec<_>, std::vec::Vec<_>) = inp.into_iter().partition(|(k,_v)| *k == ${it.getMemberName().dq()});")
 
                     rustTemplate(
                         """
@@ -201,7 +201,7 @@ class AwsQueryParserGenerator(
         val listParser =
             protocolFunctions.deserializeFn(target) { fnName ->
                 rustBlockTemplate(
-                    "pub fn $fnName(inp: Vec<(&str, &str)>) -> Result<#{List}, #{RequestRejection}>",
+                    "pub fn $fnName(inp: std::vec::Vec<(Cow<'_, str>, Cow<'_, str>)>) -> Result<#{List}, #{RequestRejection}>",
                     *codegenScope,
                     "List" to symbolProvider.toSymbol(target),
                     "RequestRejection" to requestRejection,
@@ -213,7 +213,7 @@ class AwsQueryParserGenerator(
                             rustBlock(
                                 """
                                 let mut inp = inp;
-                                let mut value = Vec::new();
+                                let mut value = std::vec::Vec::new();
                                 for i in 1..200
                                 """
                             ){
@@ -223,7 +223,7 @@ class AwsQueryParserGenerator(
                                     if value.len() <= 0 {
                                         break;
                                     }
-                                    let values: Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
+                                    let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
                                     """
                                 )
                                 withBlock("out.push(", ");") {
@@ -239,7 +239,7 @@ class AwsQueryParserGenerator(
                             rustBlock(
                                 """
                                 let mut inp = inp;
-                                let mut value = Vec::new();
+                                let mut value = std::vec::Vec::new();
                                 for i in 1..200
                                 """
                             ){
@@ -249,7 +249,7 @@ class AwsQueryParserGenerator(
                                     if value.len() <= 0 {
                                         break;
                                     }
-                                    let values: Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
+                                    let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
                                     """
                                 )
                                 withBlock("out.push(", ");") {
@@ -282,7 +282,7 @@ class AwsQueryParserGenerator(
         var structureParser = protocolFunctions.deserializeFn(target) { fnName ->
             Attribute.AllowUnusedMut.render(this)
             rustBlock(
-                "pub fn $fnName(inp: Vec<(&str, &str)>, mut builder: #1T) -> Result<#1T, #2T>",
+                "pub fn $fnName(inp: std::vec::Vec<(Cow<'_, str>, Cow<'_, str>)>, mut builder: #1T) -> Result<#1T, #2T>",
                 symbolProvider.symbolForBuilder(target),
                 requestRejection,
             ) {
@@ -318,7 +318,7 @@ class AwsQueryParserGenerator(
                                 *codegenScope,
                             )
                         } else {
-                            rust("let v = value.to_owned();")
+                            rust("let value = v.to_owned();")
                         }
                     }
                     target.isTimestampShape -> {                        
