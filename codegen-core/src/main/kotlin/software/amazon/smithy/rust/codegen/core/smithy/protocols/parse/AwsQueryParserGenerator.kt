@@ -121,7 +121,7 @@ class AwsQueryParserGenerator(
         return protocolFunctions.deserializeFn(operationShape) { fnName ->
             Attribute.AllowUnusedMut.render(this)
             rustBlock(
-                "pub fn $fnName(inp: std::vec::Vec<(Cow<'_, str>, Cow<'_, str>)>, mut builder: #1T) -> Result<#1T, #2T>",
+                "pub fn $fnName(inp: std::vec::Vec<(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)>, mut builder: #1T) -> Result<#1T, #2T>",
                 symbolProvider.symbolForBuilder(inputShape),
                 requestRejection,
             ) {
@@ -239,14 +239,14 @@ class AwsQueryParserGenerator(
                             rustBlock(
                                 """
                                 let mut inp = inp;
-                                let mut value = std::vec::Vec::new();
+                                let mut values = std::vec::Vec::new();
                                 for i in 1..200
                                 """
                             ){
                                 rust(
                                     """
                                     (inp, values) = inp.into_iter().partition(|(k,_v)| k.starts_with(&format!("{i}.")));
-                                    if value.len() <= 0 {
+                                    if values.len() <= 0 {
                                         break;
                                     }
                                     let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
