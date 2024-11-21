@@ -332,10 +332,11 @@ class ServerAwsQueryProtocol(
         operationName: String,
         serviceName: String,
         requestSpecModule: RuntimeType,
-    ): Writable = RestRequestSpecGenerator(httpBindingResolver, requestSpecModule).generate(operationShape)
+    ): Writable = writable {
+        rust(""""$operationName"""")
+    }
 
-    override fun serverRouterRequestSpecType(requestSpecModule: RuntimeType): RuntimeType =
-        requestSpecModule.resolve("RequestSpec")
+    override fun serverRouterRequestSpecType(requestSpecModule: RuntimeType): RuntimeType = RuntimeType.StaticStr
 
     override fun serverRouterRuntimeConstructor() = "new_aws_query_router"
 
