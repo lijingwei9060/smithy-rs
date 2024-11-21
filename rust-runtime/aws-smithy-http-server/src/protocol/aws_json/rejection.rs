@@ -31,6 +31,8 @@ pub enum RequestRejection {
     /// Typically happens when the request has headers that are not valid UTF-8.
     #[error("failed to convert request: {0}")]
     HttpConversion(#[from] HttpError),
+    #[error("{0} list cannot contain null values")]
+    ListContainNull(String),
 }
 
 impl From<std::convert::Infallible> for RequestRejection {
