@@ -3,11 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use std::borrow::Cow;
 use std::convert::Infallible;
 
 use aws_smithy_http::url::Url;
-use http::request;
 use tower::Layer;
 use tower::Service;
 
