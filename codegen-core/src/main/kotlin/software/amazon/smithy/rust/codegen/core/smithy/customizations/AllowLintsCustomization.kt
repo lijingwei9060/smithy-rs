@@ -19,6 +19,8 @@ private val allowedRustcLints =
         // Unknown lints need to be allowed since we use both nightly and our MSRV, and sometimes we need
         // to disable lints that are in nightly but don't exist in the MSRV.
         "unknown_lints",
+        // allow non camel case
+        "non_camel_case_types",
     )
 
 private val allowedClippyLints =
