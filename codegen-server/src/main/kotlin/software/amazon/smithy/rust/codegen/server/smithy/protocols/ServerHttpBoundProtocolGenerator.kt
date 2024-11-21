@@ -189,6 +189,7 @@ class ServerHttpBoundProtocolTraitImplGenerator(
             "PinProjectLite" to ServerCargoDependency.PinProjectLite.toType(),
             "http" to RuntimeType.Http,
             "Tracing" to RuntimeType.Tracing,
+            "HashMap" to RuntimeType.HashMap,
         )
 
     fun generateTraitImpls(
@@ -726,7 +727,7 @@ class ServerHttpBoundProtocolTraitImplGenerator(
                 rustTemplate(
                     """
                     let query_string = uri.query().unwrap_or("");
-                    let pairs: Vec<_> = #{FormUrlEncoded}::parse(query_string.as_bytes()).collect();
+                    let pairs: #{HashMap}<_,_> = #{FormUrlEncoded}::parse(query_string.as_bytes()).collect();
                     input = #{parser}(pairs, input)?;
                     """.trimIndent(),
                     *codegenScope,

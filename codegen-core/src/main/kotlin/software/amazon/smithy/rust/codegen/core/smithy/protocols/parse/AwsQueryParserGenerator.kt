@@ -7,15 +7,22 @@ package software.amazon.smithy.rust.codegen.core.smithy.protocols.parse
 
 import software.amazon.smithy.model.knowledge.HttpBinding
 import software.amazon.smithy.model.knowledge.HttpBindingIndex
+import software.amazon.smithy.codegen.core.Symbol
+import software.amazon.smithy.model.shapes.BlobShape
 import software.amazon.smithy.model.shapes.BooleanShape
 import software.amazon.smithy.model.shapes.CollectionShape
+import software.amazon.smithy.model.shapes.DocumentShape
 import software.amazon.smithy.model.shapes.MapShape
 import software.amazon.smithy.model.shapes.MemberShape
 import software.amazon.smithy.model.shapes.NumberShape
 import software.amazon.smithy.model.shapes.OperationShape
 import software.amazon.smithy.model.shapes.Shape
-import software.amazon.smithy.model.shapes.SimpleShape
+import software.amazon.smithy.model.shapes.StringShape
 import software.amazon.smithy.model.shapes.StructureShape
+import software.amazon.smithy.model.shapes.TimestampShape
+import software.amazon.smithy.model.shapes.UnionShape
+import software.amazon.smithy.model.traits.EnumTrait
+import software.amazon.smithy.model.traits.SparseTrait
 import software.amazon.smithy.model.traits.TimestampFormatTrait
 import software.amazon.smithy.rust.codegen.core.rustlang.Attribute
 import software.amazon.smithy.rust.codegen.core.rustlang.RustType
@@ -36,9 +43,17 @@ import software.amazon.smithy.rust.codegen.core.smithy.CodegenContext
 import software.amazon.smithy.rust.codegen.core.smithy.CodegenTarget
 import software.amazon.smithy.rust.codegen.core.smithy.generators.setterName
 import software.amazon.smithy.rust.codegen.core.smithy.RuntimeType
+import software.amazon.smithy.rust.codegen.core.smithy.isOptional
+import software.amazon.smithy.rust.codegen.core.smithy.isRustBoxed
+import software.amazon.smithy.rust.codegen.core.smithy.protocols.HttpBindingResolver
 import software.amazon.smithy.rust.codegen.core.smithy.protocols.ProtocolFunctions
 import software.amazon.smithy.rust.codegen.core.smithy.wrapOptional
+import software.amazon.smithy.rust.codegen.core.util.PANIC
 import software.amazon.smithy.rust.codegen.core.util.dq
+import software.amazon.smithy.rust.codegen.core.util.hasTrait
+import software.amazon.smithy.rust.codegen.core.util.inputShape
+import software.amazon.smithy.rust.codegen.core.util.isTargetUnit
+import software.amazon.smithy.rust.codegen.core.util.outputShape
 import java.util.logging.Logger
 
 /**
@@ -58,47 +73,19 @@ import java.util.logging.Logger
  */
 class AwsQueryParserGenerator(
     codegenContext: CodegenContext,
-    xmlErrors: RuntimeType,
-    private val xmlBindingTraitParserGenerator: XmlBindingTraitParserGenerator =
-        XmlBindingTraitParserGenerator(
-            codegenContext,
-            xmlErrors,
-        ) { context, inner ->
-            val operationName = codegenContext.symbolProvider.toSymbol(context.shape).name
-            val responseWrapperName = operationName + "Response"
-            val resultWrapperName = operationName + "Result"
-            rustTemplate(
-                """
-                if !(${XmlBindingTraitParserGenerator.XmlName(responseWrapperName).matchExpression("start_el")}) {
-                    return Err(#{XmlDecodeError}::custom(format!("invalid root, expected $responseWrapperName got {:?}", start_el)))
-                }
-                if let Some(mut result_tag) = decoder.next_tag() {
-                    let start_el = result_tag.start_el();
-                    if !(${XmlBindingTraitParserGenerator.XmlName(resultWrapperName).matchExpression("start_el")}) {
-                        return Err(#{XmlDecodeError}::custom(format!("invalid result, expected $resultWrapperName got {:?}", start_el)))
-                    }
-                """,
-                "XmlDecodeError" to context.xmlDecodeErrorType,
-            )
-            inner("result_tag")
-            rustTemplate(
-                """
-                } else {
-                    return Err(#{XmlDecodeError}::custom("expected $resultWrapperName tag"))
-                };
-                """,
-                "XmlDecodeError" to context.xmlDecodeErrorType,
-            )
-        },
-) : StructuredDataParserGenerator by xmlBindingTraitParserGenerator{
-    private val protocolFunctions = ProtocolFunctions(codegenContext)
+    private val httpBindingResolver: HttpBindingResolver,
+) : StructuredDataParserGenerator {
+    private val model = codegenContext.model    
     private val symbolProvider = codegenContext.symbolProvider
     private val runtimeConfig = codegenContext.runtimeConfig
-    private val model = codegenContext.model
+    private val codegenTarget = codegenContext.target
+
+    private val protocolFunctions = ProtocolFunctions(codegenContext)
+    private val builderInstantiator = codegenContext.builderInstantiator()
+
     private val logger = Logger.getLogger(javaClass.name)
     private val requestRejection = runtimeConfig.smithyRuntimeCrate("smithy-http-server")
                 .toType().resolve("protocol::aws_query::rejection::RequestRejection")
-
     private val codegenScope =
         arrayOf(
             "Cow" to RuntimeType.Cow,
@@ -113,248 +100,355 @@ class AwsQueryParserGenerator(
             "SmithyTypes" to RuntimeType.smithyTypes(runtimeConfig),
             "http" to RuntimeType.Http,
             "Tracing" to RuntimeType.Tracing,
+            "Error" to requestRejection,
+            "HashMap" to RuntimeType.HashMap,
         )
-    override fun serverInputParser(operationShape: OperationShape): RuntimeType? {
-        val inputShape = model.expectShape(operationShape.getInputShape().toShapeId())
-        var input_members = inputShape.members().toList()
-        //logger.warning("[AwsQueryParserGenerator] operation: ${operationShape.toShapeId()}, inputs $input_members")
-        return protocolFunctions.deserializeFn(operationShape) { fnName ->
-            Attribute.AllowUnusedMut.render(this)
-            rustBlock(
-                "pub fn $fnName(inp: std::vec::Vec<(std::borrow::Cow<'_, str>, std::borrow::Cow<'_, str>)>, mut builder: #1T) -> Result<#1T, #2T>",
-                symbolProvider.symbolForBuilder(inputShape),
-                requestRejection,
+    
+    /**
+     * Whether we should parse a value for a shape into its associated unconstrained type. For example, when the shape
+     * is a `StructureShape`, we should construct and return a builder instead of building into the final `struct` the
+     * user gets. This is only relevant for the server, that parses the incoming request and only after enforces
+     * constraint traits.
+     *
+     * The function returns a data class that signals the return symbol that should be parsed, and whether it's
+     * unconstrained or not.
+     */
+    private fun returnSymbolToParse (shape: Shape): ReturnSymbolToParse { 
+       return ReturnSymbolToParse(symbolProvider.toSymbol(shape), false)
+    }
+
+    override fun payloadParser(member: MemberShape): RuntimeType {
+        val shape = model.expectShape(member.target)
+        val returnSymbolToParse = returnSymbolToParse(shape)
+        check(shape is UnionShape || shape is StructureShape || shape is DocumentShape) {
+            "Payload parser should only be used on structure shapes, union shapes, and document shapes."
+        }
+        return protocolFunctions.deserializeFn(shape, fnNameSuffix = "payload") { fnName ->
+            rustBlockTemplate(
+                "pub(crate) fn $fnName(input: &[u8]) -> Result<#{ReturnType}, PayloadDontKnow>",
+                *codegenScope,
+                "ReturnType" to returnSymbolToParse.symbol,
             ) {
-                serverRenderShapeParser(inputShape)
-            }
-        }
-    }
+                val input =
+                    if (shape is DocumentShape) {
+                        "input"
+                    } else {
+                        "(input)"
+                    }
 
-    private fun RustWriter.serverRenderShapeParser(
-        shape: Shape, // 
-    ){
-
-        var shapeMemberShapeIds = model.expectShape(shape.toShapeId()).members().toList()
-
-        shapeMemberShapeIds.forEachIndexed { idx, it ->
-            var memberShape = model.expectShape(it.toShapeId(), MemberShape::class.java)
-            var targetShape = model.expectShape(memberShape.target)
-            //logger.warning("[AwsQueryParserGenerator] member: ${memberShape.toShapeId()}, ${targetShape.toShapeId()}")
-            var memberName = symbolProvider.toMemberName(memberShape)
-            var memberNameSeen = "${memberName}_seen"
-           
-            when {
-                targetShape.isMapShape() || targetShape.isStructureShape() -> {
-                    var memberLocationName = "${it.getMemberName()}."  
-                    rust("let (inp, values): (std::vec::Vec<_>, std::vec::Vec<_>) = inp.into_iter().partition(|(k,_v)| k.starts_with(${memberLocationName.dq()}));")   
-                    rust("let values: Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(${memberLocationName.dq()}).unwrap(), v)).collect();") 
-                    withBlockTemplate("builder = builder.${memberShape.setterName()}(Some(", "?));"){
-                        parseStructure(model.expectShape(memberShape.target, StructureShape::class.java))
-                    } 
-                }
-
-                targetShape.isSetShape() || targetShape.isListShape() -> {
-                    var memberLocationName = "${it.getMemberName()}.member."
-                    rust("let (inp, values): (std::vec::Vec<_>, std::vec::Vec<_>) = inp.into_iter().partition(|(k,_v)| k.starts_with(${memberLocationName.dq()}));")
-                    rust("let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(${memberLocationName.dq()}).unwrap(), v)).collect();")
-                    withBlockTemplate("builder = builder.${memberShape.setterName()}(Some(", "?));"){
-                        parseList(model.expectShape(memberShape.target, CollectionShape::class.java))
-                    }                  
-                }
-                else -> {
-                    rust("let mut ${memberNameSeen} = false;")
-                    rust("let (inp, values): (std::vec::Vec<_>, std::vec::Vec<_>) = inp.into_iter().partition(|(k,_v)| *k == ${it.getMemberName().dq()});")
-
-                    rustTemplate(
-                        """
-                        for (k, v) in values {
-                            if !${memberNameSeen} {
-                                builder = builder.${memberShape.setterName()}(Some({
-                        """.trimIndent()
-                    )
-
-                    generateParseStrFn(targetShape, false)
-
-                    rustTemplate(
-                        """
-                            }));
-                                ${memberNameSeen} = true;
-                                break;
-                            }
-                        }
-                        """.trimIndent()
-                    )                        
-                }
-            }
-
-            
-        }
-        rust("Ok(builder)")
-    }
-
-    // list 没有builder
-    private fun RustWriter.parseList(
-        target: CollectionShape,
-    ){
-        val member = target.member
-        var targetShape = model.expectShape(member.target)
-        val listParser =
-            protocolFunctions.deserializeFn(target) { fnName ->
-                rustBlockTemplate(
-                    "pub fn $fnName(inp: std::vec::Vec<(Cow<'_, str>, Cow<'_, str>)>) -> Result<#{List}, #{RequestRejection}>",
+                rustTemplate(
+                    """
+                    let mut tokens_owned = ($input).peekable();
+                    let tokens = &mut tokens_owned;
+                    """,
                     *codegenScope,
-                    "List" to symbolProvider.toSymbol(target),
-                    "RequestRejection" to requestRejection,
-                ) {
-                    rust("let mut out = std::vec::Vec::new();")
-                    when {
-                        targetShape.isMapShape() || targetShape.isStructureShape() -> {
-                            //[Tags.member].n.Tag
-                            rustBlock(
-                                """
-                                let mut inp = inp;
-                                let mut value = std::vec::Vec::new();
-                                for i in 1..200
-                                """
-                            ){
-                                rust(
-                                    """
-                                    (inp, values) = inp.into_iter().partition(|(k,_v)| k.starts_with(&format!("{i}.")));
-                                    if value.len() <= 0 {
-                                        break;
-                                    }
-                                    let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
-                                    """
-                                )
-                                withBlock("out.push(", ");") {
-                                    parseStructure(model.expectShape(member.target, StructureShape::class.java))
-                                }                            
+                )
+                rust("let result =")
+                // deserializeMember(member)
+                rustTemplate(".ok_or_else(|| {Error}::custom(\"expected payload member value\"));", *codegenScope)
+                
+                rust("result")
+            }
+        }
+    }
 
-                            }
-  
+    override fun operationParser(operationShape: OperationShape): RuntimeType? {
+        return null
+    }
+
+    override fun errorParser(errorShape: StructureShape): RuntimeType? {
+        return null
+    }
+    override fun serverInputParser(operationShape: OperationShape): RuntimeType? {
+        val inputShape = operationShape.inputShape(model)
+        var includedMembers = inputShape.members().toList()
+        return structureParser(operationShape, symbolProvider.symbolForBuilder(inputShape), includedMembers)
+    }
+
+    /**
+     * Reusable structure parser implementation that can be used to generate parsing code for
+     * operation, error and structure shapes.
+     * We still generate the parser symbol even if there are no included members because the server
+     * generation requires parsers for all input structures.
+     */
+    private fun structureParser(
+        shape: Shape,
+        builderSymbol: Symbol,
+        includedMembers: List<MemberShape>,
+        fnNameSuffix: String? = null,
+    ): RuntimeType {
+        return protocolFunctions.deserializeFn(shape, fnNameSuffix) { fnName ->
+        val unusedMut = if (includedMembers.isEmpty()) "##[allow(unused_mut)] " else ""
+        rustBlockTemplate(
+                "pub(crate) fn $fnName(inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>, ${unusedMut}mut builder: #{Builder}) -> Result<#{Builder}, #{Error}>",
+                "Builder" to builderSymbol,
+                *codegenScope,
+            ) {
+                // 
+                rustTemplate(
+                    """
+                    let mut inp = inp;
+                    let mut this_property = #{HashMap}::new();
+                    """,
+                    *codegenScope,
+                )
+                deserializeStructInner(includedMembers)
+                rust("Ok(builder)")
+            }
+        }
+    }
+
+    private fun RustWriter.deserializeStructInner(members: Collection<MemberShape>) {        
+        for (member in members) {            
+            when (codegenTarget) {
+                CodegenTarget.CLIENT ->{
+
+                }
+                CodegenTarget.SERVER -> {
+                    rustBlock(""){
+                        rust("// extract values for this property")
+                        if (isCollectionMember(member)) { // collection list
+                            var key = "${member.getMemberName()}.member."
+                            rustTemplate(
+                                """
+                                (inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with("${key}")); 
+                                this_property = this_property.into_iter().map(|(k,v)|  (#{Cow}::Owned(k.strip_prefix("${key}").unwrap().to_owned()), v)).collect();
+                                """,
+                                *codegenScope
+                            )
+                        }else if (isStructureMember(member)){ // structure or map
+                            var key = "${member.getMemberName()}."
+                            rustTemplate(
+                                """
+                                (inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with("${key}")); 
+                                this_property = this_property.into_iter().map(|(k,v)|  (#{Cow}::Owned(k.strip_prefix("${key}").unwrap().to_owned()), v)).collect();
+                                """,
+                                *codegenScope
+                            )
+                        }else{ // simple shape
+                            rust(
+                                """
+                                (inp, this_property) = inp.into_iter().partition(|(k,_v)| *k == ${member.getMemberName().dq()}); 
+                                """
+                            )
                         }
-
-                        targetShape.isSetShape() || targetShape.isListShape() -> {
-                            //[Tags.member].n.Tags.n
-                            rustBlock(
-                                """
-                                let mut inp = inp;
-                                let mut values = std::vec::Vec::new();
-                                for i in 1..200
-                                """
-                            ){
-                                rust(
-                                    """
-                                    (inp, values) = inp.into_iter().partition(|(k,_v)| k.starts_with(&format!("{i}.")));
-                                    if values.len() <= 0 {
-                                        break;
-                                    }
-                                    let values: std::vec::Vec<_> = values.into_iter().map(|(k,v)| (k.strip_prefix(&format!("{i}.")).unwrap(), v)).collect(); 
-                                    """
-                                )
-                                withBlock("out.push(", ");") {
-                                    parseList(model.expectShape(member.target, CollectionShape::class.java))
-                                }                            
-
+                        
+                        if (symbolProvider.toSymbol(member).isOptional()) {
+                            withBlock("builder = builder.${member.setterName()}(", ");") {
+                                deserializeMember(member)
                             }
-                        }
-                        else -> {// collection of simple shape
-                            //[Tags.member].n
-                            rustBlock("for (_k, v) in inp"){
-                                withBlock("out.push({", "});") {
-                                    generateParseStrFn(targetShape, false)
+                        } else {
+                            rust("if let Some(v) = ")
+                            deserializeMember(member)
+                            rust(
+                                """
+                                {
+                                    builder = builder.${member.setterName()}(v);
                                 }
-                                
-                            }                         
+                                """,
+                            )
                         }
-                    }
-                    
-                    rust("Ok(out)")
+                    }                    
+                }
+            }   
+        }       
+    }
+
+    private fun RustWriter.deserializeStruct(shape: StructureShape) {
+        val returnSymbolToParse = returnSymbolToParse(shape)
+        val nestedParser =
+            protocolFunctions.deserializeFn(shape) { fnName ->
+                rustBlockTemplate(
+                    """
+                    pub(crate) fn $fnName(inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>) -> Result<Option<#{ReturnType}>, #{Error}>
+                    """,
+                    "ReturnType" to returnSymbolToParse.symbol,
+                    *codegenScope,
+                ) {
+                    rustTemplate(
+                        """
+                        let mut inp = inp;
+                        let mut this_property = #{HashMap}::new();
+                        """,
+                        *codegenScope,
+                    )
+                
+                    Attribute.AllowUnusedMut.render(this)
+                    rustTemplate(
+                        "let mut builder = #{Builder}::default();",
+                        *codegenScope,
+                        "Builder" to symbolProvider.symbolForBuilder(shape),
+                    )
+                    deserializeStructInner(shape.members())
+                    // builderInstantiator.finalizeBuilder?
+                    rust("Ok(Some(builder))")
                 }
             }
-         rust("#T(values)", listParser)
+        rust("#T(this_property)?", nestedParser)
     }
 
-    private fun RustWriter.parseStructure(
-        target : StructureShape
-    ){
-        logger.warning("[]$target")
-        var structureParser = protocolFunctions.deserializeFn(target) { fnName ->
-            Attribute.AllowUnusedMut.render(this)
-            rustBlock(
-                "pub fn $fnName(inp: std::vec::Vec<(Cow<'_, str>, Cow<'_, str>)>, mut builder: #1T) -> Result<#1T, #2T>",
-                symbolProvider.symbolForBuilder(target),
-                requestRejection,
-            ) {
-
-                serverRenderShapeParser(target)
-            }
-        }
-        rustBlock(""){
-            rust(
-                "let mut builder = #T::default();",
-                symbolProvider.symbolForBuilder(target),
-            )
-            rust("builder = #T(values, builder)?;", structureParser)
-            rust("builder.build()?")
-        }
-        
-    }
-
-
-    private fun RustWriter.generateParseStrFn(
-        target: Shape,
-        percentDecoding: Boolean,
-    ) {    
-                
-
-                when {
-                    target.isStringShape -> {
-                        if (percentDecoding) {
-                            rustTemplate(
-                                """
-                                let value = #{PercentEncoding}::percent_decode_str(v).decode_utf8()?.into_owned();
-                                """,
-                                *codegenScope,
-                            )
-                        } else {
-                            rust("let value = v.to_owned();")
-                        }
-                    }
-                    target.isTimestampShape -> {                        
-                        val timestampFormatType = RuntimeType.smithyTypes(runtimeConfig).resolve("date_time::Format::DateTime")
-
-                        if (percentDecoding) {
-                            rustTemplate(
-                                """
-                                let value = #{PercentEncoding}::percent_decode_str(v).decode_utf8()?;
-                                let value = #{DateTime}::from_str(value.as_ref(), #{format})?
-                                """,
-                                *codegenScope,
-                                "format" to timestampFormatType,
-                            )
-                        } else {
-                            rustTemplate(
-                                """
-                                let value = #{DateTime}::from_str(v, #{format})?
-                                """,
-                                *codegenScope,
-                                "format" to timestampFormatType,
-                            )
-                        }
-                        rust(";")
-                    }
-                    else -> {
-                        check(target is NumberShape || target is BooleanShape)
+    private fun RustWriter.deserializeCollection(shape: CollectionShape) {
+        val isSparse = shape.hasTrait<SparseTrait>()
+        val (returnSymbol, returnUnconstrainedType) = returnSymbolToParse(shape)
+        val parser =
+            protocolFunctions.deserializeFn(shape) { fnName ->
+                rustBlockTemplate(
+                    """
+                    pub(crate) fn $fnName(inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>) -> Result<Option<#{ReturnType}>, #{Error}>
+                    """,
+                    "ReturnType" to returnSymbol,
+                    *codegenScope,
+                ) {
+                    
+                    rust("let mut items = Vec::new();")
+                    rustBlockTemplate(
+                        """
+                        let mut inp = inp;
+                        let mut this_property = #{HashMap}::new();
+                        for i in 1..200
+                        """,
+                        *codegenScope,
+                    ) {
+                        
                         rustTemplate(
                             """
-                            let value = <_ as #{PrimitiveParse}>::parse_smithy_primitive(v)?;
+                            (inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with(&format!("{i}"))); 
+                            this_property = this_property.into_iter().map(|(k,v)|  (#{Cow}::Owned(k.strip_prefix(&format!("{i}")).unwrap().to_owned()), v)).collect();
                             """,
-                            "PrimitiveParse" to RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
+                            *codegenScope
                         )
+                            
+                        if (isSparse) {
+                            withBlock("items.push(", ");") {
+                                deserializeMember(shape.member)
+                            }
+                        } else {
+                            withBlock("let value =", ";") {
+                                deserializeMember(shape.member)
+                            }
+                            rustTemplate(
+                                """
+                                if let Some(value) = value {
+                                    items.push(value);
+                                } else {
+                                    return Err(#{Error}::ListContainNull("${shape.getMember().getMemberName()}"));
+                                }
+                                """,
+                                *codegenScope,
+                            )
+                            
+                        }
+                            
+                        
                     }
+                    if (returnUnconstrainedType) {
+                        rust("Ok(Some(#{T}(items)))", returnSymbol)
+                    } else {
+                        rust("Ok(Some(items))")
+                    }
+                    
                 }
-                rust("value")            
-    
+            }
+        rust("#T(this_property)?", parser)
     }
+
+    private fun isCollectionMember(memberShape: MemberShape): Boolean {
+        when (model.expectShape(memberShape.target)) {
+            is StringShape -> return false
+            is BooleanShape ->  return false
+            is NumberShape ->  return false
+            is BlobShape ->  return false
+            is TimestampShape ->  return false
+            is CollectionShape ->  return true
+            is MapShape ->  return false
+            is StructureShape ->  return false
+            is UnionShape ->  return false
+            is DocumentShape ->  return false
+            else ->  return false
+        }        
+    }
+
+    private fun isStructureMember(memberShape: MemberShape): Boolean {
+        when (model.expectShape(memberShape.target)) {
+            is StringShape -> return false
+            is BooleanShape ->  return false
+            is NumberShape ->  return false
+            is BlobShape ->  return false
+            is TimestampShape ->  return false
+            is CollectionShape ->  return false
+            is MapShape ->  return true
+            is StructureShape ->  return true
+            is UnionShape ->  return false
+            is DocumentShape ->  return false
+            else ->  return false
+        }        
+    }
+
+    private fun RustWriter.deserializeMember(memberShape: MemberShape) {
+        var key = memberShape.getMemberName()
+        when (val target = model.expectShape(memberShape.target)) {
+            is StringShape -> {
+                withBlock("this_property.get(${key.dq()}).map(|u|", ")"){
+                    deserializeString(target)
+                }                
+            } 
+            is BooleanShape -> {
+                withBlock("this_property.get(${key.dq()}).map(|u|", ").transpose()?"){
+                    rustTemplate(
+                        """
+                        <_ as #{PrimitiveParse}>::parse_smithy_primitive(u)
+                        """,
+                        "PrimitiveParse" to RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
+                    )
+                }    
+            }
+            is NumberShape -> {
+                withBlock("this_property.get(${key.dq()}).map(|u|", ").transpose()?"){
+                    rustTemplate(
+                        """
+                        <_ as #{PrimitiveParse}>::parse_smithy_primitive(u)
+                        """,
+                        "PrimitiveParse" to RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
+                    )
+                }
+            }
+            is BlobShape -> {}
+            is TimestampShape -> {
+                withBlock("this_property.get(${key.dq()}).map(|u|", ").transpose()?"){
+                    val timestampFormatType = RuntimeType.smithyTypes(runtimeConfig).resolve("date_time::Format::DateTime")
+                    rustTemplate(
+                        """
+                        let value = #{DateTime}::from_str(u, #{format})
+                        """,
+                        *codegenScope,
+                        "format" to timestampFormatType,
+                    )
+                }
+            }
+            is CollectionShape -> deserializeCollection(target)
+            is MapShape -> PANIC("unexpected map shape: $target")
+            is StructureShape -> deserializeStruct(target)
+            is UnionShape -> PANIC("unexpected union shape: $target")
+            is DocumentShape -> PANIC("unexpected document shape: $target")
+            else -> PANIC("unexpected shape: $target")
+        }
+        val symbol = symbolProvider.toSymbol(memberShape)
+        if (symbol.isRustBoxed()) {
+            rust(".map(Box::new)")
+        }
+    }
+
+    private fun RustWriter.deserializeString(target: StringShape) {
+        when (target.hasTrait<EnumTrait>()) {
+            true -> {
+                if (returnSymbolToParse(target).isUnconstrained) {
+                    rust("u.to_string()")
+                } else {
+                    rust("#T::from(u.to_string().as_ref())", symbolProvider.toSymbol(target))
+                }
+            }
+            false -> rust("u.to_string()")
+        }
+    }
+
 }

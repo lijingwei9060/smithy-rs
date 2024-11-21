@@ -54,7 +54,7 @@ open class AwsQueryProtocol(val codegenContext: CodegenContext) : Protocol {
     override val defaultTimestampFormat: TimestampFormatTrait.Format = TimestampFormatTrait.Format.DATE_TIME
 
     override fun structuredDataParser(): StructuredDataParserGenerator =
-        AwsQueryParserGenerator(codegenContext, awsQueryErrors)
+        AwsQueryParserGenerator(codegenContext, httpBindingResolver)
 
     override fun structuredDataSerializer(): StructuredDataSerializerGenerator =
         XmlBindingTraitSerializerGenerator(codegenContext, httpBindingResolver)
