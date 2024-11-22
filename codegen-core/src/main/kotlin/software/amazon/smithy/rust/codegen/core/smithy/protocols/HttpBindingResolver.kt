@@ -244,7 +244,23 @@ open class StaticHttpBindingResolver(
             ?.toList()
             ?: emptyList()
 
-    override fun errorResponseBindings(errorShape: ToShapeId): List<HttpBindingDescriptor> = emptyList()
+    override fun errorResponseBindings(errorShape: ToShapeId): List<HttpBindingDescriptor> = 
+        errorShape?.let { model.expectShape(it.toShapeId()) }?.members()
+            ?.map { 
+                 member -> 
+                //logger.warning("[StaticHttpBindingResolver] ${member.target} ${member.getMemberName()}")
+                
+                // val targetShape = model.expectShape(member.getTarget())
+                // val location = when {
+                //     targetShape?.isListShape() == true -> HttpLocation.QUERY_PARAMS
+                //     targetShape?.isSetShape() == true -> HttpLocation.QUERY_PARAMS
+                //     else -> HttpLocation.QUERY
+                // }
+                
+                HttpBindingDescriptor(member, HttpLocation.DOCUMENT, member.getMemberName())
+             }
+            ?.toList()
+            ?: emptyList()
 
     override fun requestContentType(operationShape: OperationShape): String = requestContentType
 
