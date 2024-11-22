@@ -10,29 +10,40 @@ use tower::Layer;
 use tower::Service;
 
 use crate::body::BoxBody;
+use crate::response::IntoResponse;
+use crate::routing::method_disallowed;
 use crate::routing::tiny_map::TinyMap;
 use crate::routing::Route;
 use crate::routing::Router;
 
-use http::header::ToStrError;
 use thiserror::Error;
 
-/// An AWS JSON routing error.
+use super::AwsQuery;
+
+/// An AWS Query routing error.
 #[derive(Debug, Error)]
 pub enum Error {
     /// Method was not `POST`.
     #[error("method not POST")]
     MethodNotAllowed,
-    /// Missing the `action` in query parameters.
-    #[error("missing the \"action\" in query parameters")]
-    MissingAction,
-    /// Unable to parse header into UTF-8.
-    #[error("failed to parse header: {0}")]
-    InvalidHeader(ToStrError),
     /// Operation not found.
     #[error("operation not found")]
     NotFound,
 }
+
+impl IntoResponse<AwsQuery> for Error {
+    fn into_response(self) -> http::Response<BoxBody> {
+        match self {
+            Error::NotFound => http::Response::builder()
+                .status(http::StatusCode::NOT_FOUND)
+                .header(http::header::CONTENT_TYPE, "text/xml")
+                .body(crate::body::to_boxed("{}"))
+                .expect("invalid HTTP response for REST JSON 1 routing error; please file a bug report under https://github.com/smithy-lang/smithy-rs/issues"),
+            Error::MethodNotAllowed => method_disallowed(),
+        }
+    }
+}
+
 
 // This constant determines when the `TinyMap` implementation switches from being a `Vec` to a
 // `HashMap`. This is chosen to be 15 as a result of the discussion around
@@ -90,7 +101,7 @@ where
         }
 
         // The URI must be root
-        let url = Url::parse(&request.uri().to_string()).map_err(|_e| Error::MissingAction)?;
+        let url = Url::parse(&request.uri().to_string()).map_err(|_e| Error::NotFound)?;
 
         let (_, target) = url
             .query_pairs()
@@ -98,8 +109,7 @@ where
                 k == "Action"
             })
             .ok_or({
-                println!("2");
-                Error::MissingAction
+                Error::NotFound
             })?;
 
         // Lookup in the `TinyMap` for a route for the target.
@@ -141,7 +151,7 @@ mod tests {
 
         // No headers, should return `MissingAction`.
         let res = router.match_route(&req(&Method::POST, "/", None));
-        assert_eq!(res.unwrap_err().to_string(), Error::MissingAction.to_string());
+        assert_eq!(res.unwrap_err().to_string(), Error::NotFound.to_string());
 
         // Wrong HTTP method, should return `MethodNotAllowed`.
         let res = router.match_route(&req(&Method::GET, "/", None));
