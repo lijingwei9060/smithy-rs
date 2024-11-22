@@ -149,6 +149,16 @@ fun jsonParserGenerator(
         ) + additionalParserCustomizations,
     )
 
+fun awsQueryParserGenerator(
+    codegenContext: ServerCodegenContext,
+    httpBindingResolver: HttpBindingResolver,
+): AwsQueryParserGenerator =
+    AwsQueryParserGenerator(
+        codegenContext,
+        httpBindingResolver,        
+        returnSymbolToParseFn(codegenContext),
+    )
+
 class ServerAwsJsonProtocol(
     private val serverCodegenContext: ServerCodegenContext,
     awsJsonVersion: AwsJsonVersion,
@@ -318,10 +328,13 @@ class ServerRestXmlProtocol(
 }
 
 class ServerAwsQueryProtocol(
-    codegenContext: ServerCodegenContext,
-) : AwsQueryProtocol(codegenContext), ServerProtocol {
+    private val serverCodegenContext: ServerCodegenContext,
+) : AwsQueryProtocol(serverCodegenContext), ServerProtocol {
     val runtimeConfig = codegenContext.runtimeConfig
     override val protocolModulePath = "aws_query"
+
+    override fun structuredDataParser(): StructuredDataParserGenerator =
+        awsQueryParserGenerator(serverCodegenContext, httpBindingResolver)
 
     override fun markerStruct() = ServerRuntimeType.protocol("AwsQuery", protocolModulePath, runtimeConfig)
 

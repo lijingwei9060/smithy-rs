@@ -74,6 +74,18 @@ import java.util.logging.Logger
 class AwsQueryParserGenerator(
     codegenContext: CodegenContext,
     private val httpBindingResolver: HttpBindingResolver,
+    /**
+     * Whether we should parse a value for a shape into its associated unconstrained type. For example, when the shape
+     * is a `StructureShape`, we should construct and return a builder instead of building into the final `struct` the
+     * user gets. This is only relevant for the server, that parses the incoming request and only after enforces
+     * constraint traits.
+     *
+     * The function returns a data class that signals the return symbol that should be parsed, and whether it's
+     * unconstrained or not.
+     */
+    private val returnSymbolToParse: (Shape) -> ReturnSymbolToParse = { shape ->
+        ReturnSymbolToParse(codegenContext.symbolProvider.toSymbol(shape), false)
+    },
 ) : StructuredDataParserGenerator {
     private val model = codegenContext.model    
     private val symbolProvider = codegenContext.symbolProvider
@@ -103,19 +115,6 @@ class AwsQueryParserGenerator(
             "Error" to requestRejection,
             "HashMap" to RuntimeType.HashMap,
         )
-    
-    /**
-     * Whether we should parse a value for a shape into its associated unconstrained type. For example, when the shape
-     * is a `StructureShape`, we should construct and return a builder instead of building into the final `struct` the
-     * user gets. This is only relevant for the server, that parses the incoming request and only after enforces
-     * constraint traits.
-     *
-     * The function returns a data class that signals the return symbol that should be parsed, and whether it's
-     * unconstrained or not.
-     */
-    private fun returnSymbolToParse (shape: Shape): ReturnSymbolToParse { 
-       return ReturnSymbolToParse(symbolProvider.toSymbol(shape), false)
-    }
 
     override fun payloadParser(member: MemberShape): RuntimeType {
         val shape = model.expectShape(member.target)
@@ -180,18 +179,23 @@ class AwsQueryParserGenerator(
         return protocolFunctions.deserializeFn(shape, fnNameSuffix) { fnName ->
         val unusedMut = if (includedMembers.isEmpty()) "##[allow(unused_mut)] " else ""
         rustBlockTemplate(
-                "pub(crate) fn $fnName(inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>, ${unusedMut}mut builder: #{Builder}) -> Result<#{Builder}, #{Error}>",
+                "pub(crate) fn $fnName(##[allow(unused_variables)]inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>, ${unusedMut}mut builder: #{Builder}) -> Result<#{Builder}, #{Error}>",
                 "Builder" to builderSymbol,
                 *codegenScope,
             ) {
                 // 
-                rustTemplate(
-                    """
-                    let mut inp = inp;
-                    let mut this_property = #{HashMap}::new();
-                    """,
-                    *codegenScope,
-                )
+                if (includedMembers.isNotEmpty()) {
+                  rustTemplate(
+                        """
+                        ##[allow(unused_assignments)]
+                        let mut inp = inp;
+                        ##[allow(unused_assignments)]
+                        let mut this_property = #{HashMap}::new();
+                        """,
+                        *codegenScope,
+                    )  
+                }
+                
                 deserializeStructInner(includedMembers)
                 rust("Ok(builder)")
             }
@@ -211,7 +215,7 @@ class AwsQueryParserGenerator(
                             var key = "${member.getMemberName()}.member."
                             rustTemplate(
                                 """
-                                (inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with("${key}")); 
+                                (##[allow(unused_assignments)]inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with("${key}")); 
                                 this_property = this_property.into_iter().map(|(k,v)|  (#{Cow}::Owned(k.strip_prefix("${key}").unwrap().to_owned()), v)).collect();
                                 """,
                                 *codegenScope
@@ -220,7 +224,7 @@ class AwsQueryParserGenerator(
                             var key = "${member.getMemberName()}."
                             rustTemplate(
                                 """
-                                (inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with("${key}")); 
+                                (##[allow(unused_assignments)]inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with("${key}")); 
                                 this_property = this_property.into_iter().map(|(k,v)|  (#{Cow}::Owned(k.strip_prefix("${key}").unwrap().to_owned()), v)).collect();
                                 """,
                                 *codegenScope
@@ -228,7 +232,7 @@ class AwsQueryParserGenerator(
                         }else{ // simple shape
                             rust(
                                 """
-                                (inp, this_property) = inp.into_iter().partition(|(k,_v)| *k == ${member.getMemberName().dq()}); 
+                                (##[allow(unused_assignments)]inp, this_property) = inp.into_iter().partition(|(k,_v)| *k == ${member.getMemberName().dq()}); 
                                 """
                             )
                         }
@@ -260,18 +264,24 @@ class AwsQueryParserGenerator(
             protocolFunctions.deserializeFn(shape) { fnName ->
                 rustBlockTemplate(
                     """
-                    pub(crate) fn $fnName(inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>) -> Result<Option<#{ReturnType}>, #{Error}>
+                    pub(crate) fn $fnName(##[allow(unused_variables)] inp: #{HashMap}<#{Cow}<str>, #{Cow}<str>>) -> Result<Option<#{ReturnType}>, #{Error}>
                     """,
                     "ReturnType" to returnSymbolToParse.symbol,
                     *codegenScope,
                 ) {
-                    rustTemplate(
-                        """
-                        let mut inp = inp;
-                        let mut this_property = #{HashMap}::new();
-                        """,
-                        *codegenScope,
-                    )
+                    if (shape.members().isNotEmpty()) {
+                        // not empty
+                        rustTemplate(
+                            """
+                            ##[allow(unused_assignments)]
+                            let mut inp = inp;
+                            ##[allow(unused_assignments)]
+                            let mut this_property = #{HashMap}::new();
+                            """,
+                            *codegenScope,
+                        )
+                    }
+                   
                 
                     Attribute.AllowUnusedMut.render(this)
                     rustTemplate(
@@ -280,8 +290,15 @@ class AwsQueryParserGenerator(
                         "Builder" to symbolProvider.symbolForBuilder(shape),
                     )
                     deserializeStructInner(shape.members())
-                    // builderInstantiator.finalizeBuilder?
-                    rust("Ok(Some(builder))")
+                    val builder =
+                        builderInstantiator.finalizeBuilder(
+                            "builder", shape,
+                        ) {
+                            rustTemplate(
+                                """|err|#{Error}::custom_source("Response was invalid", err)""", *codegenScope,
+                            )
+                        }
+                    rust("Ok(Some(#T))", builder)
                 }
             }
         rust("#T(this_property)?", nestedParser)
@@ -303,7 +320,9 @@ class AwsQueryParserGenerator(
                     rust("let mut items = Vec::new();")
                     rustBlockTemplate(
                         """
+                        ##[allow(unused_assignments)]
                         let mut inp = inp;
+                        ##[allow(unused_assignments)]
                         let mut this_property = #{HashMap}::new();
                         for i in 1..200
                         """,
@@ -312,7 +331,7 @@ class AwsQueryParserGenerator(
                         
                         rustTemplate(
                             """
-                            (inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with(&format!("{i}"))); 
+                            (##[allow(unused_assignments)]inp, this_property) = inp.into_iter().partition(|(k,_v)| k.starts_with(&format!("{i}"))); 
                             this_property = this_property.into_iter().map(|(k,v)|  (#{Cow}::Owned(k.strip_prefix(&format!("{i}")).unwrap().to_owned()), v)).collect();
                             """,
                             *codegenScope
@@ -331,7 +350,7 @@ class AwsQueryParserGenerator(
                                 if let Some(value) = value {
                                     items.push(value);
                                 } else {
-                                    return Err(#{Error}::ListContainNull("${shape.getMember().getMemberName()}"));
+                                    return Err(#{Error}::ListContainNull("${shape.getMember().getMemberName()}".to_string()));
                                 }
                                 """,
                                 *codegenScope,
@@ -396,9 +415,10 @@ class AwsQueryParserGenerator(
                 withBlock("this_property.get(${key.dq()}).map(|u|", ").transpose()?"){
                     rustTemplate(
                         """
-                        <_ as #{PrimitiveParse}>::parse_smithy_primitive(u)
+                        <bool as #{PrimitiveParse}>::parse_smithy_primitive(u).map_err(|_e|#{Error}::ParseFailed("${key}".to_string()))
                         """,
                         "PrimitiveParse" to RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
+                        *codegenScope
                     )
                 }    
             }
@@ -406,9 +426,10 @@ class AwsQueryParserGenerator(
                 withBlock("this_property.get(${key.dq()}).map(|u|", ").transpose()?"){
                     rustTemplate(
                         """
-                        <_ as #{PrimitiveParse}>::parse_smithy_primitive(u)
+                        <i32 as #{PrimitiveParse}>::parse_smithy_primitive(u).map_err(|_e|#{Error}::ParseFailed("${key}".to_string()))
                         """,
                         "PrimitiveParse" to RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Parse"),
+                        *codegenScope
                     )
                 }
             }

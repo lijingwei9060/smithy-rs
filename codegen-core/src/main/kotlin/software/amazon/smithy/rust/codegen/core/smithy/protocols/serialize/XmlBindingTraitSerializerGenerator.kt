@@ -326,7 +326,7 @@ class XmlBindingTraitSerializerGenerator(
 
             is BooleanShape, is NumberShape -> {
                 rust(
-                    "#T::from(${autoDeref(input)}).encode()",
+                    "#T::from(${autoDeref(input)}.inner()).encode()",
                     RuntimeType.smithyTypes(runtimeConfig).resolve("primitive::Encoder"),
                 )
             }
