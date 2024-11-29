@@ -27,8 +27,8 @@ rt-tokio = [
     "dep:http"
 ]
 test-util = []
-serde-serialize = []
-serde-deserialize = []
+serde-serialize = ["dep:serde"]
+serde-deserialize = ["dep:serde"]
 
 [dependencies]
 base64-simd = "0.8"
@@ -46,6 +46,8 @@ pin-project-lite = "0.2.9"
 pin-utils = "0.1.0"
 ryu = "1.0.5"
 time = { version = "0.3.4", features = ["parsing"] }
+serde = { version = "1", features = ["derive"], optional = true }
+
 
 # ByteStream internals
 futures-core = { version = "0.3.29", optional = true }
@@ -89,10 +91,6 @@ stable = true
 [[bench]]
 name = "base64"
 harness = false
-
-[target."cfg(aws_sdk_unstable)".dependencies.serde]
-version = "1"
-features = ["derive"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(aws_sdk_unstable)'] }

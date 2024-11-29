@@ -17,10 +17,10 @@ use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-#[cfg(all(aws_sdk_unstable, feature = "serde-deserialize"))]
+#[cfg(feature = "serde-deserialize")]
 mod de;
 mod format;
-#[cfg(all(aws_sdk_unstable, feature = "serde-serialize"))]
+#[cfg( feature = "serde-serialize")]
 mod ser;
 
 pub use self::format::DateTimeFormatError;
